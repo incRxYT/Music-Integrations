@@ -19,7 +19,6 @@ protected:
     CCLabelBMFont* m_unavailableLabel;
     CCLabelBMFont* m_autoLabel;
     CCMenu* m_menu;
-    //CCMenuItemSpriteExtra* m_settingsBtn;
     CCMenuItemSpriteExtra* m_rewindBtn;
     CCMenuItemSpriteExtra* m_playbackBtn;
     CCMenuItemSpriteExtra* m_skipBtn;
@@ -29,6 +28,7 @@ protected:
     ListenerHandle m_artistListener;
     ListenerHandle m_imageListener;
     ListenerHandle m_playbackListener;
+    ListenerHandle m_thumbnailListener; // NEW
 
     arc::TaskHandle<void> m_pollingTask;
     int m_pollingCooldown = 0;
@@ -86,12 +86,6 @@ protected:
                 ->setAxisAlignment(AxisAlignment::Center)
             );
 
-            /*m_settingsBtn = CCMenuItemSpriteExtra::create(
-                CCSprite::createWithSpriteFrameName("GJ_optionsBtn02_001.png"),
-                this,
-                menu_selector(MusicControlOverlay::onSettings)
-            );*/
-
             m_rewindBtn = CCMenuItemSpriteExtra::create(
                 CCSprite::create("previous.png"_spr),
                 this,
@@ -120,7 +114,6 @@ protected:
             m_autoLabel = CCLabelBMFont::create("Auto", "bigFont.fnt");
             m_autoLabel->setScale(0.7f);
 
-            //m_menu->addChild(m_settingsBtn);
             m_menu->addChild(m_rewindBtn);
             m_menu->addChild(m_playbackBtn);
             m_menu->addChild(m_skipBtn);
@@ -134,14 +127,8 @@ protected:
             this->addChildAtPosition(m_unavailableLabel, Anchor::Center);
         }
 
-		
-
 		return true;
 	}
-
-    /*void onSettings(CCObject*) {
-        openSettingsPopup(Mod::get(), false);
-    }*/
 
     void onPlayback(CCObject*) {
         pbm.toggleControl();
@@ -277,6 +264,13 @@ protected:
                 return ListenerResult::Propagate;
             });
         }
+
+        // NEW: listen for Windows thumbnail bytes (YT Music / any SMTC source)
+        m_thumbnailListener = PlaybackManager::ThumbnailUpdateEvent("thumbnail-update"_spr).listen([this](auto bytes) {
+            if (!bytes.empty()) this->updateImageFromBytes(bytes);
+            return ListenerResult::Propagate;
+        });
+
         m_playbackListener = PlaybackManager::PlaybackUpdateEvent("playback-update"_spr).listen([this](bool status) {
             togglePlaybackBtn(status);
         });
@@ -303,7 +297,7 @@ protected:
                     co_await notify.notified();
                     if (m_pollingCooldown > 0) m_pollingCooldown -= 1;
                     
-                    if (m_pollingCooldown <= 0 && m_pollingToggle &&Mod::get()->getSavedValue<bool>("hasAuthorized")) {
+                    if (m_pollingCooldown <= 0 && m_pollingToggle && Mod::get()->getSavedValue<bool>("hasAuthorized")) {
                         PlaybackManager::get().spotifyGetPlaybackInfo(token, 0);
                         m_pollingCooldown = 4;
                     }
@@ -317,6 +311,7 @@ protected:
         m_titleListener.destroy();
         m_artistListener.destroy();
         m_playbackListener.destroy();
+        m_thumbnailListener.destroy(); // NEW
         if (m_pollingTask.isValid()) m_pollingTask.abort();
         CCLayer::onExit();
     }
@@ -329,7 +324,6 @@ public:
 		auto create = MusicControlOverlay::create();
 		create->setID("overlay"_spr);
         create->setPosition(AnchorLayout::getAnchoredPosition(CCScene::get(), Anchor::BottomRight, ccp(230, 10)));
-		//CCScene::get()->addChildAtPosition(create, Anchor::BottomRight, ccp(205, 10), false);
         OverlayManager::get()->addChild(create);
 		return create;
 	}
@@ -355,8 +349,6 @@ public:
                 ));
                 m_playbackBtn->updateSprite();
             });
-
-
         }
         #endif
         if (Mod::get()->getSavedValue<bool>("hasAuthorized") && !pbm.isWindows()) {
@@ -401,6 +393,39 @@ public:
         this->addChildAtPosition(m_musicImage, Anchor::Left, ccp(10 + m_musicImage->getContentSize().width/2, 0));
         m_musicImage->setAutoResize(true);
         m_musicImage->loadFromUrl(url);
+    }
+
+    // NEW: decode raw JPEG/PNG bytes (from Windows SMTC thumbnail) into the image slot
+    void updateImageFromBytes(std::vector<uint8_t> const& bytes) {
+        if (!m_musicImage || bytes.empty()) return;
+
+        auto* image = new CCImage();
+        if (!image->initWithImageData(
+                const_cast<void*>(static_cast<const void*>(bytes.data())),
+                static_cast<int>(bytes.size()))) {
+            image->release();
+            return;
+        }
+
+        auto* texture = new CCTexture2D();
+        if (!texture->initWithImage(image)) {
+            image->release();
+            texture->release();
+            return;
+        }
+        image->release();
+        texture->autorelease();
+
+        float imgSize = this->getContentSize().height * 0.85f;
+        this->removeChild(m_musicImage);
+        m_musicImage = LazySprite::create({imgSize, imgSize});
+        m_musicImage->setAutoResize(true);
+        m_musicImage->setTexture(texture);
+        m_musicImage->setZOrder(1);
+        this->addChildAtPosition(
+            m_musicImage, Anchor::Left,
+            ccp(10 + m_musicImage->getContentSize().width / 2, 0)
+        );
     }
 
     void togglePlaybackBtn(bool status) {

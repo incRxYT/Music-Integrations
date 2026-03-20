@@ -20,6 +20,25 @@ bool PlaybackManager::isWindows() {
 }
 
 #ifdef GEODE_IS_WINDOWS
+
+// Helper: reads thumbnail bytes from a session's media properties and fires ThumbnailUpdateEvent
+static void fetchAndSendThumbnail(GlobalSystemMediaTransportControlsSessionMediaProperties const& props) {
+    try {
+        auto thumb = props.Thumbnail();
+        if (!thumb) return;
+        auto stream = thumb.OpenReadAsync().get();
+        uint64_t size = stream.Size();
+        if (size == 0 || size > 4 * 1024 * 1024) return;
+        winrt::Windows::Storage::Streams::Buffer buf(static_cast<uint32_t>(size));
+        stream.ReadAsync(buf, static_cast<uint32_t>(size),
+            winrt::Windows::Storage::Streams::InputStreamOptions::None).get();
+        auto reader = winrt::Windows::Storage::Streams::DataReader::FromBuffer(buf);
+        std::vector<uint8_t> bytes(static_cast<size_t>(size));
+        reader.ReadBytes(bytes);
+        PlaybackManager::ThumbnailUpdateEvent("thumbnail-update"_spr).send(bytes);
+    } catch (...) {}
+}
+
 bool PlaybackManager::getMediaManager() {
     if (!isWindows()) {
         log::debug("Running on non-Windows system, skipping media manager initialization.");
@@ -48,6 +67,9 @@ bool PlaybackManager::getMediaManager() {
                         if (title  != lastSongName)  { lastSongName  = title;  SongUpdateEvent("title-update"_spr).send(title); }
                         if (artist != lastArtistName) { lastArtistName = artist; SongUpdateEvent("artist-update"_spr).send(artist); }
                     });
+
+                    // Fetch thumbnail on the background thread (winrt callback thread)
+                    fetchAndSendThumbnail(async2.GetResults());
                 });
             });
 
@@ -72,6 +94,9 @@ bool PlaybackManager::getMediaManager() {
                         if (title  != lastSongName)  { lastSongName  = title;  SongUpdateEvent("title-update"_spr).send(title); }
                         if (artist != lastArtistName) { lastArtistName = artist; SongUpdateEvent("artist-update"_spr).send(artist); }
                     });
+
+                    // Fetch thumbnail on the background thread (winrt callback thread)
+                    fetchAndSendThumbnail(async2.GetResults());
                 });
             Loader::get()->queueInMainThread([this, session] {
                 auto status = session.GetPlaybackInfo().PlaybackStatus();

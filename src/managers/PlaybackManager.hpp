@@ -51,6 +51,10 @@ public:
     struct RateLimitUpdate : Event<RateLimitUpdate, bool(), std::string> {
         using Event::Event;
     };
+    // NEW: fires with raw JPEG/PNG bytes of the current track thumbnail
+    struct ThumbnailUpdateEvent : ThreadSafeEvent<ThumbnailUpdateEvent, bool(std::vector<uint8_t>), std::string> {
+        using ThreadSafeEvent::ThreadSafeEvent;
+    };
 
     static PlaybackManager& get() {
         static PlaybackManager instance;
